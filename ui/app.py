@@ -979,7 +979,7 @@ with tab_copilot:
     save_title = st.text_input("Título (se salvar)", value="Cena gerada", disabled=not save_flag)
     
     if st.button("✍️ Gerar Cena", use_container_width=True, type="primary"):
-        if mode == "Ideia" and not idea_text.strip():
+        if mode == "Ideia" and not (idea_text or "").strip():
             st.error("Descreva a ideia base.")
         elif mode == "Capítulo existente" and not chapter_pick:
             st.error("Selecione um capítulo para expandir.")
@@ -988,14 +988,14 @@ with tab_copilot:
                 "book_id": book_id,
                 "source": "idea" if mode == "Ideia" else "chapter",
                 "idea": idea_text if mode == "Ideia" else None,
-                "chapter_id": chapter_pick["id"] if (mode != "Ideia" and chapter_pick) else None,
-                "use_memory": use_memory_map[ctx],
-                "include_current": include_current,
+                "chapter_id": (chapter_pick["id"] if (mode == "Capítulo existente" and chapter_pick) else None),
+                "use_memory": use_memory_map[ctx],          # 'none' | 'book' | 'book+current'
+                "include_current": include_current,         # True para "Somente atual" e "Livro + atual"
                 "current_title": st.session_state.get("shared_chapter_title"),
                 "current_text": st.session_state.get("shared_chapter_text"),
                 "length": length,
                 "save_as_chapter": save_flag,
-                "title": save_title if save_flag else None,
+                "title": (save_title if save_flag else None),
                 "show_prompt": False
             }
             try:
@@ -1005,11 +1005,11 @@ with tab_copilot:
                     st.success("✅ Cena gerada!")
                     if data.get("saved"):
                         st.info(f"💾 Salvo como capítulo **{data['saved']['title']}** (id: {data['saved']['chapter_id']})")
-                    
+
                     st.markdown("### 📄 Resultado")
                     st.text_area("Cena", value=data["scene"], height=400, disabled=True)
-                    
-                    # Atalho: enviar para editor principal
+
+                    # Atalho: enviar para o editor
                     if st.button("⬇️ Usar como rascunho no editor", key="use_as_draft"):
                         st.session_state["editing_chapter"] = {
                             "id": "rascunho",

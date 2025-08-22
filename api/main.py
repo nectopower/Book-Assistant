@@ -483,6 +483,24 @@ def ready():
             "chroma": {"ok": False, "status": "error"},
             "llm": {"ok": False, "detail": "error"}
         }
+@app.get("/chapters/{book_id}")
+def list_chapters(book_id: str):
+    import glob, os
+    base = "/data/chapters"
+    files = sorted(glob.glob(os.path.join(base, f"{book_id}__*.md")))
+    out = []
+    for fp in files:
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                content = f.read()
+            # título = primeira linha '# ' ou 1ª linha não vazia
+            first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
+            title = first[2:].strip() if first.startswith("# ") else (first[:120] or "Capítulo")
+            chap_id = os.path.basename(fp).split("__", 1)[1].removesuffix(".md")
+            out.append({"id": chap_id, "title": title, "file_path": fp})
+        except Exception:
+            pass
+    return {"book_id": book_id, "chapters": out}
 
 @app.get("/chroma/status")
 async def chroma_status_endpoint():
@@ -621,6 +639,15 @@ def delete_book_memory(book_id: str):
         # apaga tudo que tiver esse book_id
         col.delete(where={"book_id": book_id})
         return {"success": True, "message": f"Memória do livro '{book_id}' removida."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@app.delete("/chroma/book/{book_id}")
+def clear_book_memory(book_id: str):
+    if not (CHROMA_AVAILABLE and HAVE_CHROMA_CLIENT and COLLECTION):
+        return {"success": False, "message": "Chroma não inicializado"}
+    try:
+        COLLECTION.delete(where={"book_id": book_id})
+        return {"success": True, "message": f"Memória do livro '{book_id}' apagada"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1175,52 +1202,48 @@ def ideate(inp: IdeateIn):
 
 class ExpandIn(BaseModel):
     book_id: Optional[str] = None
-
-    # de onde vem a base do texto
-    source: Literal["idea", "chapter"] = "idea"
-    idea: Optional[str] = None          # usado quando source="idea"
-    chapter_id: Optional[str] = None    # usado quando source="chapter"
-
-    # controle de contexto/memória
-    use_memory: Literal["none", "book", "book+current"] = "book"
-    include_current: bool = False       # injeta o que o usuário está editando agora
+    source: str = "idea"                   # 'idea' | 'chapter'
+    idea: Optional[str] = None
+    chapter_id: Optional[str] = None
+    use_memory: str = "book"               # 'none' | 'book' | 'book+current'
+    include_current: bool = False
     current_title: Optional[str] = None
     current_text: Optional[str] = None
     k: int = 8
-
-    # saída
     length: str = "500-800 palavras"
     save_as_chapter: bool = False
     title: Optional[str] = None
     show_prompt: bool = False
 
-@app.get("/chapters/{book_id}")
-def list_chapters(book_id: str):
-    """Lista todos os capítulos de um livro"""
-    docs = _read_chapters_fs(book_id)
-    return {"chapters": [{"id": d["id"], "title": d["title"]} for d in docs]}
-
 @app.post("/expand")
 def expand(inp: ExpandIn):
-    """Escreve uma cena a partir de uma ideia ou capítulo, com controle preciso de contexto."""
-    # Decide a base (ideia ou capítulo)
+    """
+    Escreve uma cena a partir de uma ideia OU capítulo existente, controlando o uso de memória.
+    """
+    import uuid
+
+    # 1) Base do pedido: ideia ou capítulo escolhido
+    base_text = (inp.idea or "").strip()
     if inp.source == "chapter":
         if not (inp.book_id and inp.chapter_id):
-            raise HTTPException(status_code=400, detail="Para 'chapter', envie 'book_id' e 'chapter_id'.")
-        ch = read_chapter(inp.book_id, inp.chapter_id)
-        base_text = ch["text"]
-        base_kind = "CAPÍTULO"
-    else:
-        if not inp.idea:
-            raise HTTPException(status_code=400, detail="Para 'idea', envie o campo 'idea'.")
-        base_text = inp.idea
-        base_kind = "IDEIA"
+            raise HTTPException(status_code=400, detail="Faltam book_id/chapter_id")
+        ch = read_chapter(inp.book_id, inp.chapter_id)  # usa helper existente
+        base_text = f"[Capítulo {inp.chapter_id} — {ch['title']}]\n{ch['text']}"
 
-    # Constrói o contexto de acordo com o modo escolhido
-    context = _build_context(
-        inp.book_id, inp.use_memory, inp.k, inp.include_current, inp.current_title, inp.current_text
-    )
+    # 2) Memória do livro (RAG)
+    context = ""
+    if inp.use_memory in ("book", "book+current") and inp.book_id:
+        docs = _read_chapters_fs(inp.book_id)
+        hits = _semantic_top_k(base_text or "expandir cena", docs, k=inp.k)
+        context = _fmt_context(hits)
 
+    # 3) Capítulo atual do editor (opcional)
+    cur_block = ""
+    if inp.include_current and inp.current_text:
+        cur_title = inp.current_title or "Capítulo atual"
+        cur_block = f"\n## CAPÍTULO ATUAL: {cur_title}\n{inp.current_text}\n"
+
+    # 4) Prompt final
     system = {
         "role": "system",
         "content": (
@@ -1231,24 +1254,25 @@ def expand(inp: ExpandIn):
     user = {
         "role": "user",
         "content": (
-            f"## CONTEXTO (Memória)\n{context}\n\n"
-            f"## BASE ({base_kind})\n{base_text}\n\n"
+            f"## CONTEXTO (Memória)\n{context}"
+            f"{cur_block}\n\n"
+            f"## BASE\n{base_text}\n\n"
             f"Diretriz de tamanho: {inp.length}\n"
             "Entregue apenas a cena, sem metacomentários."
         )
     }
-    preview = f"[SYSTEM]\n{system['content']}\n\n[USER]\n{user['content']}" if inp.show_prompt else None
 
     scene = openai_chat([system, user], temperature=0.8, max_tokens=2200)
 
+    # 5) Salvar como capítulo, se pedido
     saved = None
     if inp.save_as_chapter and inp.book_id:
         ch_id = str(uuid.uuid4())[:8]
-        title = inp.title or ("Cena gerada" if inp.source == "idea" else f"Expansão de {base_kind.lower()}")
+        title = inp.title or "Cena gerada"
         path = save_chapter(inp.book_id, ch_id, title, scene)
         saved = {"chapter_id": ch_id, "path": path, "title": title}
 
-    return {"scene": scene, "saved": saved, "prompt_preview": preview}
+    return {"scene": scene, "saved": saved}
 
 if __name__ == "__main__":
     import uvicorn
