@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    command: >
+      --model Qwen/Qwen2.5-14B-Instruct
+      --dtype auto
+      --max-model-len 32768
+      --tensor-parallel-size 2
+      --gpu-memory-utilization 0.92
+      --served-model-name book-llm
+    environment:
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
+    ports:
+      - "8015:8000"
+    shm_size: "16gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+              driver: nvidia
+              count: 2
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - ./data/chroma:/chroma/chroma
+    ports:
+      - "8001:8000"
+
+  api:
+    build:
+      context: ./api
+    container_name: book-api
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_BASE=http://vllm:8000/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - DATA_DIR=/data
+    volumes:
+      - ./data:/data
+    ports:
+      - "8010:8010"
+    depends_on:
+      - vllm
+      - chroma
+
+  ui:
+    build:
+      context: ./ui
+    container_name: book-ui
+    env_file:
+      - .env
+    environment:
+      - API_BASE=http://api:8010
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+volumes:
+  huggingface_cache:

@@ -1,0 +1,102 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    # ====== ESCOLHA DO MODELO ======
+    # Padrão: Phi-3.5-mini-instruct (leve, 128k contexto; cabe folgado em 1 GPU)
+    command: >
+      --model microsoft/Phi-3.5-mini-instruct
+      --dtype auto
+      --max-model-len 131072
+      --tensor-parallel-size 1
+      --gpu-memory-utilization 0.92
+      --served-model-name book-llm
+    # --- Alternativas (substitua o bloco "command" acima por um destes) ---
+    # 1) Qwen 2.5 14B Instruct (o que já roda bem aí; usa as 2 GPUs):
+    # command: >
+    #   --model Qwen/Qwen2.5-14B-Instruct
+    #   --dtype auto
+    #   --max-model-len 131072
+    #   --tensor-parallel-size 2
+    #   --gpu-memory-utilization 0.92
+    #   --served-model-name book-llm
+    #
+    # 2) Phi-3.5-MoE-instruct quantizado (tentar caber em 48 GB):
+    #    - precisa usar um repositório AWQ/INT4 (ex.: danieldk/Phi-3.5-MoE-instruct-AWQ-INT4)
+    #    - ative quantização na linha abaixo
+    # command: >
+    #   --model danieldk/Phi-3.5-MoE-instruct-AWQ-INT4
+    #   --quantization awq
+    #   --dtype auto
+    #   --max-model-len 65536
+    #   --tensor-parallel-size 2
+    #   --gpu-memory-utilization 0.92
+    #   --served-model-name book-llm
+    #
+    # 3) Llama 3.1 8B Instruct (alternativa estável, 128k contexto; cabe fácil):
+    # command: >
+    #   --model meta-llama/Llama-3.1-8B-Instruct
+    #   --dtype auto
+    #   --max-model-len 131072
+    #   --tensor-parallel-size 1
+    #   --gpu-memory-utilization 0.92
+    #   --served-model-name book-llm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+              driver: nvidia
+              count: 2   # mantenha 2 se for usar TP=2; para mini/8B com TP=1 pode deixar 1
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "8015:8000"
+
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - ./data/chroma:/chroma/chroma
+    ports:
+      - "8001:8000"
+
+  api:
+    build:
+      context: ./api
+    container_name: book-api
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_BASE=http://vllm:8000/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - DATA_DIR=/data
+    volumes:
+      - ./data:/data
+    ports:
+      - "8010:8010"
+    depends_on:
+      - vllm
+      - chroma
+
+  ui:
+    build:
+      context: ./ui
+    container_name: book-ui
+    env_file:
+      - .env
+    environment:
+      - API_BASE=http://api:8010
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+volumes:
+  huggingface_cache:
