@@ -1,0 +1,246 @@
+### ╔══════════════════════════════════════════════════════════════╗
+### ║                 VARIÁVEIS / AMBIENTE (edite)                ║
+### ╚══════════════════════════════════════════════════════════════╝
+@api_base = http://localhost:8010
+@vllm_base = http://localhost:8015
+@chroma_base = http://localhost:8001
+@openai_key = sk-local-anything
+@model = book-llm
+@book_id = meu-livro-de-teste
+
+### Para títulos/ids únicos
+@now = {{$timestamp}}
+@uuid = {{$uuid}}
+
+
+### ──────────────────────────────────────────────────────────────
+### 0) SAÚDE / READINESS
+### ──────────────────────────────────────────────────────────────
+
+# Health simples da API
+GET {{api_base}}/health
+
+###
+
+# Readiness (confere vLLM + Chroma)
+GET {{api_base}}/ready
+
+
+### ──────────────────────────────────────────────────────────────
+### 1) LLM (via vLLM OpenAI API)
+### ──────────────────────────────────────────────────────────────
+
+# Modelos disponíveis no vLLM
+GET {{vllm_base}}/v1/models
+Authorization: Bearer {{openai_key}}
+
+###
+
+# Chat completions mínimo (vLLM)
+POST {{vllm_base}}/v1/chat/completions
+Authorization: Bearer {{openai_key}}
+Content-Type: application/json
+
+{
+  "model": "{{model}}",
+  "messages": [
+    {"role": "system", "content": "Você é útil e sucinto."},
+    {"role": "user", "content": "Diga oi em PT-BR."}
+  ],
+  "max_tokens": 50,
+  "temperature": 0.3,
+  "stream": false
+}
+
+
+### ──────────────────────────────────────────────────────────────
+### 2) CHROMA (HTTP direto)
+### ──────────────────────────────────────────────────────────────
+
+# Heartbeat do Chroma
+GET {{chroma_base}}/api/v2/heartbeat
+
+###
+
+
+### ──────────────────────────────────────────────────────────────
+### 3) API – Capítulos (criar, listar, atualizar)
+### ──────────────────────────────────────────────────────────────
+
+# 3.1) Criar capítulo (POST /chapter/save)
+POST {{api_base}}/chapter/save
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "title": "Capítulo de Teste {{now}}",
+  "text": "# Capítulo de Teste\n\nEste é um capítulo de teste salvo em {{now}}.\nCom algumas linhas de conteúdo."
+}
+
+> {%
+// Salva o chapter_id para as próximas chamadas
+try {
+  const data = JSON.parse(response.body);
+  client.global.set("chapter_id", data.chapter_id);
+  client.log("chapter_id => " + data.chapter_id);
+} catch (e) {
+  client.log("Falha ao extrair chapter_id: " + e);
+}
+%}
+
+###
+
+# 3.2) Listar capítulos do livro (GET /chapters/{book_id})
+GET {{api_base}}/chapters/{{book_id}}
+
+###
+
+# 3.3) Atualizar (sobrescrever) capítulo (PUT /chapter/update)
+PUT {{api_base}}/chapter/update
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "chapter_id": "{{chapter_id}}",
+  "title": "Capítulo Atualizado {{now}}",
+  "text": "# Capítulo Atualizado\n\nConteúdo atualizado em {{now}}.\nNovas linhas aqui."
+}
+
+
+### ──────────────────────────────────────────────────────────────
+### 4) API – Ferramentas de escrita (testes rápidos)
+### ──────────────────────────────────────────────────────────────
+
+# 4.1) Teste rápido do LLM (POST /test-llm)
+POST {{api_base}}/test-llm
+
+###
+
+# 4.2) Gerar sugestões (POST /suggest)
+POST {{api_base}}/suggest
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "current_chapter_title": "Capítulo Atualizado {{now}}",
+  "current_chapter_text": "Texto do capítulo atual para gerar sugestões.",
+  "k": 8
+}
+
+###
+
+# 4.3) Crítica editorial (POST /critique)
+POST {{api_base}}/critique
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "current_chapter_title": "Capítulo Atualizado {{now}}",
+  "current_chapter_text": "Texto do capítulo atual para crítica editorial.",
+  "k": 8
+}
+
+###
+
+# 4.4) Pergunta livre (POST /ask)
+POST {{api_base}}/ask
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "question": "O arco dramático do protagonista está coerente?",
+  "k": 6,
+  "use_memory": true,
+  "include_current": true,
+  "current_title": "Capítulo Atualizado {{now}}",
+  "current_text": "Este é o capítulo atual para apoiar a resposta.",
+  "show_prompt": false
+}
+
+###
+
+# 4.5) Ideação (POST /ideate)
+POST {{api_base}}/ideate
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "theme": "Suspense numa cidade costeira com segredos antigos",
+  "n": 5,
+  "use_memory": false,
+  "k": 6,
+  "style": "Tom noir, 1ª pessoa",
+  "show_prompt": false
+}
+
+###
+
+# 4.6) Expandir cena a partir de IDEIA (POST /expand)
+# (Versão compatível com API que espera 'idea'; se sua API já aceita 'source'/'chapter_id', adapte.)
+POST {{api_base}}/expand
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "idea": "Uma jornalista encontra um diário que liga a prefeitura a desaparecimentos.",
+  "use_memory": true,
+  "k": 8,
+  "length": "500-800 palavras",
+  "save_as_chapter": false,
+  "title": "Cena gerada",
+  "show_prompt": false
+}
+
+
+### ──────────────────────────────────────────────────────────────
+### 5) API – Metadados / Debug
+### ──────────────────────────────────────────────────────────────
+
+# 5.1) Extrair metadados de um trecho (POST /metadata/extract)
+POST {{api_base}}/metadata/extract
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "chapter_title": "Capítulo para Metadados",
+  "chapter_text": "Texto de exemplo para extrair metadados estruturados."
+}
+
+###
+
+# 5.2) Debug: extrair metadados do capítulo salvo (POST /debug/metadata-extraction)
+# (Este endpoint recebe params como query string)
+POST {{api_base}}/debug/metadata-extraction?book_id={{book_id}}&chapter_id={{chapter_id}}
+
+
+### ──────────────────────────────────────────────────────────────
+### 6) API – ChromaDB (status, listar, detalhes, limpar, reindexar)
+### ──────────────────────────────────────────────────────────────
+
+# 6.1) Status do Chroma
+GET {{api_base}}/chroma/status
+
+###
+
+# 6.2) Listar coleções
+GET {{api_base}}/chroma/collections
+
+###
+
+# 6.3) Detalhar coleção book_memory
+GET {{api_base}}/chroma/collection/book_memory
+
+###
+
+# 6.4) Limpar SOMENTE a memória do livro atual
+DELETE {{api_base}}/chroma/book/{{book_id}}
+
+###
+
+# 6.5) Limpar TODAS as coleções
+DELETE {{api_base}}/chroma/clear
+
+###
+
+# 6.6) Reindexar capítulos já salvos no disco (/data/chapters)
+POST {{api_base}}/chroma/vectorize-existing

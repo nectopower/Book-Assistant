@@ -1,0 +1,213 @@
+### Book Assistant API - Testes de Endpoints
+
+# ========================
+# Configuração Base
+# ========================
+@base_url = http://localhost:8010
+@book_id = dr-gog
+@chapter_id = cap1
+
+# ========================
+# 1. HEALTH & STATUS
+# ========================
+
+### Verificar se a API está rodando
+GET {{base_url}}/health
+
+### Verificar readiness completo
+GET {{base_url}}/ready
+
+### Status do ChromaDB
+GET {{base_url}}/chroma/status
+
+### Listar coleções do ChromaDB
+GET {{base_url}}/chroma/collections
+
+### Ver documentos de uma coleção
+GET {{base_url}}/chroma/collection/book_memory
+
+# ========================
+# 2. GESTÃO DE CAPÍTULOS
+# ========================
+
+### Salvar novo capítulo
+POST {{base_url}}/chapter/save
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "title": "Capítulo de Teste",
+    "text": "Este é um capítulo de teste para verificar se a API está funcionando corretamente."
+}
+
+### Atualizar capítulo existente
+PUT {{base_url}}/chapter/update
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "chapter_id": "{{chapter_id}}",
+    "title": "Capítulo Atualizado",
+    "text": "Este capítulo foi atualizado com sucesso."
+}
+
+### Listar capítulos de um livro
+GET {{base_url}}/chapters/{{book_id}}
+
+### Obter metadados de um livro
+GET {{base_url}}/metadata/book/{{book_id}}
+
+# ========================
+# 3. FUNCIONALIDADES DE IA
+# ========================
+
+### Gerar sugestões para um capítulo
+POST {{base_url}}/suggest
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "current_chapter_title": "Capítulo de Teste",
+    "current_chapter_text": "Este é um capítulo de teste para verificar se a API está funcionando corretamente.",
+    "k": 8
+}
+
+### Analisar coerência de um capítulo
+POST {{base_url}}/critique
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "current_chapter_title": "Capítulo de Teste",
+    "current_chapter_text": "Este é um capítulo de teste para verificar se a API está funcionando corretamente.",
+    "k": 8
+}
+
+### Fazer pergunta livre ao copiloto
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "question": "Como posso melhorar este capítulo?",
+    "k": 8,
+    "use_memory": true,
+    "include_current": true,
+    "current_title": "Capítulo de Teste",
+    "current_text": "Este é um capítulo de teste para verificar se a API está funcionando corretamente.",
+    "show_prompt": false
+}
+
+### Gerar ideias a partir de um tema
+POST {{base_url}}/ideate
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "theme": "Um detetive precisa provar sua inocência em uma cidade que o odeia",
+    "n": 5,
+    "use_memory": false,
+    "k": 6,
+    "style": "Tom noir, 1ª pessoa, twist no final",
+    "show_prompt": false
+}
+
+### Expandir ideia ou capítulo
+POST {{base_url}}/expand
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "source": "idea",
+    "idea": "Um escritor decide se isolar na serra para romper o bloqueio criativo",
+    "use_memory": "book",
+    "include_current": false,
+    "length": "500-800 palavras",
+    "save_as_chapter": false,
+    "show_prompt": false
+}
+
+# ========================
+# 4. MANUTENÇÃO & LIMPEZA
+# ========================
+
+### Vetorizar capítulos existentes do disco
+POST {{base_url}}/chroma/vectorize-existing
+
+### Limpar memória de um livro específico
+DELETE {{base_url}}/chroma/book/{{book_id}}
+
+### Limpar TODAS as coleções
+DELETE {{base_url}}/chroma/clear
+
+### Debug de extração de metadados
+POST {{base_url}}/debug/metadata-extraction
+Content-Type: application/json
+
+{
+    "book_id": "{{book_id}}",
+    "chapter_id": "{{chapter_id}}",
+    "text": "Este é um capítulo de teste para verificar se a API está funcionando corretamente."
+}
+
+# ========================
+# 5. TESTES DE CONECTIVIDADE
+# ========================
+
+### Testar vLLM diretamente
+GET http://localhost:8015/v1/models
+
+### Testar ChromaDB diretamente
+GET http://localhost:8001/api/v2/heartbeat
+
+# ========================
+# 6. EXEMPLOS DE USO REAL
+# ========================
+
+### Fluxo completo: Salvar capítulo e gerar sugestões
+# 1. Primeiro salve um capítulo
+POST {{base_url}}/chapter/save
+Content-Type: application/json
+
+{
+    "book_id": "meu-romance",
+    "title": "O Encontro",
+    "text": "Maria caminhava pela rua quando viu João pela primeira vez. Seus olhos se encontraram e algo mágico aconteceu."
+}
+
+# 2. Depois gere sugestões
+POST {{base_url}}/suggest
+Content-Type: application/json
+
+{
+    "book_id": "meu-romance",
+    "current_chapter_title": "O Encontro",
+    "current_chapter_text": "Maria caminhava pela rua quando viu João pela primeira vez. Seus olhos se encontraram e algo mágico aconteceu.",
+    "k": 8
+}
+
+### Teste de ideias para um romance policial
+POST {{base_url}}/ideate
+Content-Type: application/json
+
+{
+    "book_id": "romance-policial",
+    "theme": "Um policial corrupto descobre que sua filha foi sequestrada",
+    "n": 3,
+    "use_memory": false,
+    "style": "Suspense, 3ª pessoa, final surpreendente"
+}
+
+### Teste de expansão de ideia
+POST {{base_url}}/expand
+Content-Type: application/json
+
+{
+    "book_id": "romance-policial",
+    "source": "idea",
+    "idea": "Um policial honesto é acusado de um crime que não cometeu e precisa provar sua inocência enquanto persegue o verdadeiro culpado",
+    "use_memory": "none",
+    "length": "800-1200 palavras",
+    "save_as_chapter": true,
+    "title": "A Perseguição"
+}

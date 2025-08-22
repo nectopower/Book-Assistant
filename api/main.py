@@ -1,9 +1,13 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import os, uuid, json, time
+import os
+import uuid
+import json
+import time
 from datetime import datetime
-from typing import List, Optional, Dict, Literal
-import re, glob
+from typing import List, Optional, Dict
+import re
+import glob
 import requests
 import chromadb
 from chromadb.config import Settings
@@ -76,13 +80,13 @@ try:
         from chromadb.config import Settings as ChromaSettings
         CHROMA_CLIENT = chromadb.HttpClient(
             host=CHROMA_HOST,
-            port=CHROMA_PORT,
+    port=CHROMA_PORT,
             settings=ChromaSettings(anonymized_telemetry=False),
-            tenant=TENANT,
-            database=DATABASE,
-        )
+    tenant=TENANT,
+    database=DATABASE,
+)
         COLLECTION = CHROMA_CLIENT.get_or_create_collection(
-            name="book_memory",
+    name="book_memory",
             metadata={"hnsw:space": "cosine"}
         )
         HAVE_CHROMA_CLIENT = True
@@ -332,32 +336,22 @@ def save_critique(book_id: str, chapter_id: str, title: str, critique: str):
     return path
 
 def upsert_to_chroma(book_id: str, chapter_id: str, title: str, text: str, summary: Dict) -> bool:
-    """Salva/atualiza no Chroma usando upsert (idempotente)."""
+    """Upsert no Chroma com embeddings (cliente HTTP)."""
     if not (CHROMA_AVAILABLE and HAVE_CHROMA_CLIENT and COLLECTION):
-        # Sem client → apenas loga sucesso lógico
-        print(f"[INFO] (fake) upsert Chroma: {book_id}:{chapter_id}")
+        # Sem cliente → considere ok para não travar o fluxo
+        print(f"[INFO] (skip) Chroma indisponível, seguindo sem indexar {book_id}:{chapter_id}")
         return True
     try:
-        summary_text = summary_to_text(title, summary)
+        summary_text = summary_to_text(title, summary) if isinstance(summary, dict) else str(summary)
+        docs = [summary_text, text]
+
+        # Sem embeddings por enquanto - apenas texto
         COLLECTION.upsert(
-            ids=[
-                f"{book_id}:{chapter_id}:summary",
-                f"{book_id}:{chapter_id}:full",
-            ],
-            documents=[summary_text, text],
+            ids=[f"{book_id}:{chapter_id}:summary", f"{book_id}:{chapter_id}:full"],
+            documents=docs,
             metadatas=[
-                {
-                    "book_id": book_id,
-                    "chapter_id": chapter_id,
-                    "title": title,
-                    "type": "summary",
-                },
-                {
-                    "book_id": book_id,
-                    "chapter_id": chapter_id,
-                    "title": title,
-                    "type": "chapter",
-                },
+                {"book_id": book_id, "chapter_id": chapter_id, "title": title, "type": "summary"},
+                {"book_id": book_id, "chapter_id": chapter_id, "title": title, "type": "chapter"},
             ],
         )
         print(f"[OK] upsert Chroma: {book_id}:{chapter_id}")
@@ -365,6 +359,7 @@ def upsert_to_chroma(book_id: str, chapter_id: str, title: str, text: str, summa
     except Exception as e:
         print(f"[ERROR] upsert Chroma falhou: {e}")
         return False
+
 
 def summarize_chapter(title: str, text: str) -> Dict:
     """Gera resumo estruturado do capítulo"""
@@ -405,7 +400,7 @@ def get_chromadb_health_string():
             r = requests.get(f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/heartbeat", timeout=3)
             if r.status_code == 200:
                 return "connected"
-        except:
+        except Exception:
             pass
         return "degraded"
     return "disconnected"
@@ -485,7 +480,8 @@ def ready():
         }
 @app.get("/chapters/{book_id}")
 def list_chapters(book_id: str):
-    import glob, os
+    import glob
+    import os
     base = "/data/chapters"
     files = sorted(glob.glob(os.path.join(base, f"{book_id}__*.md")))
     out = []
@@ -641,15 +637,7 @@ def delete_book_memory(book_id: str):
         return {"success": True, "message": f"Memória do livro '{book_id}' removida."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-@app.delete("/chroma/book/{book_id}")
-def clear_book_memory(book_id: str):
-    if not (CHROMA_AVAILABLE and HAVE_CHROMA_CLIENT and COLLECTION):
-        return {"success": False, "message": "Chroma não inicializado"}
-    try:
-        COLLECTION.delete(where={"book_id": book_id})
-        return {"success": True, "message": f"Memória do livro '{book_id}' apagada"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# Duplicata removida - mantendo apenas delete_book_memory acima
 
 @app.delete("/chroma/clear")
 async def clear_chromadb():
@@ -688,78 +676,75 @@ async def clear_chromadb():
 
 @app.post("/chroma/vectorize-existing")
 async def vectorize_existing_chapters():
-    """Vetoriza todos os capítulos existentes no disco"""
+    """
+    Vetoriza apenas arquivos padrão `book_id__chapter_id.md`.
+    Ignora `sugest_*` e `critica_*`.
+    """
     try:
         if not CHROMA_AVAILABLE:
             raise HTTPException(status_code=503, detail="ChromaDB não disponível")
-        
-        # Lista todos os arquivos de capítulos
+
         chapters_dir = "/data/chapters"
         if not os.path.exists(chapters_dir):
             raise HTTPException(status_code=404, detail="Diretório de capítulos não encontrado")
-        
-        # Encontra todos os arquivos .md
+
         import glob
-        chapter_files = glob.glob(f"{chapters_dir}/*.md")
-        
-        if not chapter_files:
-            return {
-                "success": True,
-                "message": "Nenhum capítulo encontrado para vetorizar",
-                "vectorized_count": 0
-            }
-        
+        all_files = glob.glob(f"{chapters_dir}/*.md")
+        total = len(all_files)
         vectorized_count = 0
         errors = []
-        
-        for file_path in chapter_files:
+
+        pat = re.compile(r"^(.+?)__([^.]+)\.md$", re.IGNORECASE)
+
+        for file_path in all_files:
+            fn = os.path.basename(file_path)
+
+            # Ignora sugestões/críticas
+            if fn.startswith(("sugest_", "critica_")):
+                continue
+
+            m = pat.match(fn)
+            if not m:
+                # nome fora do padrão → ignora
+                continue
+
+            book_id, chapter_id = m.group(1), m.group(2)
+
             try:
-                # Extrai book_id e chapter_id do nome do arquivo
-                filename = os.path.basename(file_path)
-                if "__" in filename:
-                    parts = filename.split("__", 1)
-                    book_id = parts[0]
-                    chapter_id = parts[1].replace(".md", "")
-                    
-                    # Lê o conteúdo do arquivo
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    # Extrai título e texto
-                    lines = content.splitlines()
-                    title = "Capítulo"
-                    if lines and lines[0].startswith("# "):
-                        title = lines[0][2:].strip()
-                        text = "\n".join(lines[1:]).lstrip()
-                    else:
-                        text = content
-                    
-                    # Extrai metadados
-                    metadata = extract_metadata_from_chapter(book_id, title, text)
-                    
-                    # Vetoriza no ChromaDB
-                    chroma_ok = upsert_to_chroma(book_id, chapter_id, title, text, metadata.dict())
-                    
-                    if chroma_ok:
-                        vectorized_count += 1
-                        print(f"[INFO] Capítulo vetorizado: {book_id}:{chapter_id}")
-                    else:
-                        errors.append(f"Falha ao vetorizar {book_id}:{chapter_id}")
-                        
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                lines = content.splitlines()
+                title = "Capítulo"
+                if lines and lines[0].startswith("# "):
+                    title = lines[0][2:].strip()
+                    text = "\n".join(lines[1:]).lstrip()
+                else:
+                    text = content
+
+                # metadados mínimos (ou use extract_metadata_from_chapter se preferir)
+                summary = summarize_chapter(title, text)
+
+                chroma_ok = upsert_to_chroma(book_id, chapter_id, title, text, summary)
+                if chroma_ok:
+                    vectorized_count += 1
+                else:
+                    errors.append(f"Falha ao vetorizar {book_id}:{chapter_id}")
+
             except Exception as e:
-                errors.append(f"Erro ao processar {file_path}: {str(e)}")
-                print(f"[ERROR] Erro ao processar {file_path}: {e}")
-        
+                errors.append(f"Erro ao processar {fn}: {e}")
+
         return {
             "success": True,
-            "message": f"Vetorização concluída. {vectorized_count} capítulos processados.",
+            "message": "Vetorização concluída.",
             "vectorized_count": vectorized_count,
-            "total_files": len(chapter_files),
-            "errors": errors
+            "total_files": total,
+            "errors": errors,
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/debug/metadata-extraction")
 async def debug_metadata_extraction(book_id: str, chapter_id: str):
@@ -1039,7 +1024,6 @@ def critique_chapter(payload: CritiqueIn):
 # ========================
 # ====== NOVOS RECURSOS: Perguntar / Idear / Expandir ======
 # ========================
-import numpy as np
 
 # Embeddings (lazy): tentamos carregar MiniLM; se falhar, caímos em score por palavras
 _embed_model = None
@@ -1082,7 +1066,7 @@ def _semantic_top_k(query: str, docs, k: int = 8):
         qv = model.encode([query], normalize_embeddings=True)
         dv = model.encode([ (d["title"] + "\n" + d["text"][:2000]) for d in docs ], normalize_embeddings=True)
         sims = (dv @ qv[0])
-        idx = np.argsort(-sims)[:k]
+        idx = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:k]
         out = []
         for i in idx:
             d = docs[int(i)]
@@ -1170,7 +1154,7 @@ def ideate(inp: IdeateIn):
     """Gera N ideias estruturadas (JSON) a partir de um tema (com memória opcional)."""
     context = ""
     if inp.use_memory and inp.book_id:
-        hits = _semantic_top_k(inp.theme, _read_chapters_fs(inp.book_id), k=inp.k)
+        hits = _semantic_top_k(inp.idea, _read_chapters_fs(inp.book_id), k=inp.k)
         context = _fmt_context(hits)
     style = f"\nPreferências/estilo: {inp.style}" if inp.style else ""
     system = {

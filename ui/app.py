@@ -1,6 +1,10 @@
-import os, time, requests, streamlit as st
-import re, json
-from typing import List, Dict, Optional
+import os
+import time
+import requests
+import streamlit as st
+import re
+import json
+from typing import List, Dict
 
 st.set_page_config(page_title="Copiloto de Livro", layout="wide", page_icon="✍️")
 
@@ -502,93 +506,7 @@ with st.sidebar:
     book_id = sel["id"]
     st.info(f"📚 **Livro selecionado:** {sel.get('name', book_id)}  —  ID: {book_id}")
     
-    # Seção para visualizar ChromaDB
-    st.subheader("💾 ChromaDB Explorer")
-    
-    if st.button("🔍 Ver Status do ChromaDB", type="secondary"):
-        st.session_state["show_chroma"] = True
-        st.rerun()
-    
-    if st.session_state.get("show_chroma", False):
-        try:
-            import requests
-            
-            # Status do ChromaDB
-            status_response = requests.get(f"{API_BASE}/chroma/status", timeout=10)
-            if status_response.ok:
-                status_data = status_response.json()
-                
-                if status_data["success"]:
-                    st.success(f"✅ **ChromaDB:** {status_data['status']}")
-                    st.info(f"📊 **Coleções:** {status_data['total_collections']}")
-                    st.info(f"🌐 **Host:** {status_data['host']}:{status_data['port']}")
-                    
-                    # Lista coleções
-                    collections_response = requests.get(f"{API_BASE}/chroma/collections", timeout=10)
-                    if collections_response.ok:
-                        collections_data = collections_response.json()
-                        
-                        if collections_data["collections"]:
-                            st.subheader("📚 Coleções Disponíveis")
-                            
-                            for collection in collections_data["collections"]:
-                                with st.expander(f"📁 {collection['name']} ({collection['count']} docs)", expanded=False):
-                                    st.write(f"**📊 Documentos:** {collection['count']}")
-                                    
-                                    # Botão para ver detalhes da coleção
-                                    if st.button(f"🔍 Ver Detalhes", key=f"details_{collection['name']}"):
-                                        st.session_state[f"show_collection_{collection['name']}"] = True
-                                        st.rerun()
-                                    
-                                    # Mostra detalhes se solicitado
-                                    if st.session_state.get(f"show_collection_{collection['name']}", False):
-                                        details_response = requests.get(f"{API_BASE}/chroma/collection/{collection['name']}", timeout=10)
-                                        if details_response.ok:
-                                            details_data = details_response.json()
-                                            
-                                            if details_data["success"]:
-                                                st.write(f"**📄 Total de documentos:** {details_data['total_documents']}")
-                                                
-                                                for doc in details_data["documents"][:5]:  # Mostra só os 5 primeiros
-                                                    st.write(f"**📄 Documento:** {doc['id'][:50]}...")
-                                                    st.write("**Metadata:**")
-                                                    for key, value in doc['metadata'].items():
-                                                        st.write(f"   • **{key}:** {value}")
-                                                    
-                                                    if doc.get('document_preview'):
-                                                        st.write("**Preview do documento:**")
-                                                        st.text(doc['document_preview'])
-                                                    
-                                                    st.divider()
-                                                
-                                                if details_data['total_documents'] > 5:
-                                                    st.info(f"📚 ... e mais {details_data['total_documents'] - 5} documentos")
-                                                
-                                                # Botão para fechar detalhes
-                                                if st.button(f"❌ Fechar Detalhes", key=f"close_{collection['name']}"):
-                                                    st.session_state[f"show_collection_{collection['name']}"] = False
-                                                    st.rerun()
-                                            else:
-                                                st.error(f"❌ Erro: {details_data['error']}")
-                                        else:
-                                            st.error(f"❌ Erro ao carregar detalhes: {details_response.status_code}")
-                        else:
-                            st.info("📝 Nenhuma coleção encontrada no ChromaDB")
-                    else:
-                        st.error(f"❌ Erro ao listar coleções: {collections_response.status_code}")
-                else:
-                    st.error(f"❌ **ChromaDB:** {status_data['message']}")
-            else:
-                st.error(f"❌ Erro ao verificar status: {status_response.status_code}")
-            
-            # Botão para fechar
-            if st.button("❌ Fechar ChromaDB Explorer", type="secondary"):
-                st.session_state["show_chroma"] = False
-                st.rerun()
-                
-        except Exception as e:
-            st.error(f"❌ Erro de conexão: {str(e)}")
-            st.info("💡 Certifique-se de que a API está rodando")
+    # ChromaDB Explorer removido da sidebar - agora está na aba Memória
     
     k = st.slider("Memória (Top-K)", 3, 15, 8, help="Quanto maior o K, mais contexto recupera dos capítulos anteriores.")
     
@@ -891,61 +809,9 @@ with tab_copilot:
     # Conteúdo da aba Escrever
     colA, colB = st.columns(2)
     with colA:
-        mode = st.radio("Gerar a partir de:", ["Ideia", "Capítulo existente"], horizontal=True, key="expand_mode")
+        mode = st.radio("Gerar a partir de:", ["Ideia", "Capítulo existente"], horizontal=True, key="expand_mode_unique")
     with colB:
-        ctx = st.radio("Contexto:", ["Sem memória", "Memória do livro", "Somente capítulo atual", "Livro + capítulo atual"], index=1, key="expand_ctx")
-    
-    use_memory_map = {
-        "Sem memória": "none",
-        "Memória do livro": "book",
-        "Somente capítulo atual": "none",
-        "Livro + capítulo atual": "book+current",
-    }
-    include_current = (ctx in ["Somente capítulo atual", "Livro + capítulo atual"])
-    ask_q = st.text_area("O que você quer perguntar ao copiloto?", height=160, placeholder="Ex.: O arco da Ana está crível até aqui?", key="ask_question_tab2")
-    colA, colB, colC = st.columns(3)
-    with colA:
-        ask_use_mem = st.checkbox("Usar memória (Top-K)", value=True, key="ask_use_mem_tab2")
-    with colB:
-        ask_k = st.slider("Top-K", 3, 15, 8, key="ask_k_tab2")
-    with colC:
-        ask_incl_cur = st.checkbox("Incluir capítulo atual", value=bool(chapter_text.strip()), key="ask_incl_cur_tab2")
-    ask_show = st.checkbox("Mostrar prompt final (debug)", value=False, key="ask_show_tab2")
-    if st.button("🤖 Perguntar", use_container_width=True, type="primary", key="ask_button_tab2"):
-        if not ask_q.strip():
-            st.error("Escreva a pergunta.")
-        else:
-            payload = {
-                "book_id": book_id,
-                "question": ask_q,
-                "k": ask_k,
-                "use_memory": ask_use_mem,
-                "include_current": ask_incl_cur,
-                "current_title": chapter_title if ask_incl_cur else None,
-                "current_text": chapter_text if ask_incl_cur else None,
-                "show_prompt": ask_show
-            }
-            try:
-                r = requests.post(f"{API_BASE}/ask", json=payload, timeout=600)
-                if r.ok:
-                    data = r.json()
-                    st.success("✅ Resposta do copiloto")
-                    st.write(data["answer"])
-                    if data.get("prompt_preview"):
-                        with st.expander("📦 Prompt enviado (debug)", expanded=False):
-                            st.code(data["prompt_preview"])
-                else:
-                    st.error(f"Erro: {r.text}")
-            except Exception as e:
-                st.error(f"Erro de conexão: {e}")
-
-
-    
-    colA, colB = st.columns(2)
-    with colA:
-        mode = st.radio("Gerar a partir de:", ["Ideia", "Capítulo existente"], horizontal=True, key="expand_mode")
-    with colB:
-        ctx = st.radio("Contexto:", ["Sem memória", "Memória do livro", "Somente capítulo atual", "Livro + capítulo atual"], index=1, key="expand_ctx")
+        ctx = st.radio("Contexto:", ["Sem memória", "Memória do livro", "Somente capítulo atual", "Livro + capítulo atual"], index=1, key="expand_ctx_unique")
     
     use_memory_map = {
         "Sem memória": "none",
@@ -1035,35 +901,93 @@ if editing_chapter:
             del st.session_state["editing_mode"]
         st.rerun()
 
+# ========================
+# 🧠 Memória & 🛠️ Manutenção (em abas separadas)
+# ========================
 st.divider()
+st.header("📦 Memória & Manutenção")
 
-# ========================
-# 🧹 Limpeza / Manutenção
-# ========================
-st.subheader("🧹 Limpeza / Manutenção")
+tab_mem, tab_maint = st.tabs(["Memória (ChromaDB)", "Manutenção"])
 
-colA, colB = st.columns(2)
+with tab_mem:
+    st.subheader("💾 ChromaDB Explorer")
 
-# 1) Limpar só o livro atual (requer a rota /chroma/book/{book_id} no backend)
-with colA:
-    if st.button("🗑️ Limpar memória do livro atual", type="secondary"):
-        if not book_id:
-            st.error("Nenhum livro selecionado.")
-        else:
-            if st.checkbox("Confirmo apagar a memória deste livro", key="confirm_clear_book"):
-                try:
-                    r = requests.delete(f"{API_BASE}/chroma/book/{book_id}", timeout=30)
-                    if r.ok:
-                        st.success(f"Memória do livro '{book_id}' apagada.")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("🔍 Ver Status do ChromaDB", key="mem_status_btn"):
+            try:
+                status_response = requests.get(f"{API_BASE}/chroma/status", timeout=10)
+                if status_response.ok:
+                    status_data = status_response.json()
+                    if status_data.get("success"):
+                        st.success(f"✅ ChromaDB: {status_data['status']}")
+                        st.info(f"📊 Coleções: {status_data['total_collections']}")
+                        st.info(f"🌐 Host: {status_data['host']}:{status_data['port']}")
                     else:
-                        st.error(f"Erro ({r.status_code}): {r.text}")
-                except Exception as e:
-                    st.error(f"Falha de conexão: {e}")
+                        st.error(status_data.get("message", "Erro"))
+                else:
+                    st.error(f"HTTP {status_response.status_code}")
+            except Exception as e:
+                st.error(f"Falha: {e}")
 
-# 2) Limpar TUDO (todas as coleções)
-with colB:
-    if st.button("🧽 Limpar TODAS as coleções", type="secondary"):
-        if st.checkbox("Confirmo que desejo apagar TUDO", key="confirm_clear_all"):
+    with col2:
+        if st.button("📂 Listar coleções", key="mem_list_collections"):
+            try:
+                r = requests.get(f"{API_BASE}/chroma/collections", timeout=10)
+                if r.ok:
+                    data = r.json()
+                    cols = data.get("collections", [])
+                    if not cols:
+                        st.info("Nenhuma coleção encontrada.")
+                    else:
+                        for c in cols:
+                            with st.expander(f"{c['name']} ({c['count']} docs)", expanded=False):
+                                st.json(c)
+                else:
+                    st.error(f"Erro: HTTP {r.status_code}")
+            except Exception as e:
+                st.error(f"Falha: {e}")
+
+    with col3:
+        if st.button("📄 Ver docs do livro atual", key="mem_list_docs_book"):
+            try:
+                r = requests.get(f"{API_BASE}/chroma/collection/book_memory", timeout=30)
+                if r.ok:
+                    data = r.json()
+                    docs = [d for d in data.get("documents", []) if d.get("metadata", {}).get("book_id") == book_id]
+                    if not docs:
+                        st.info("Nenhum documento deste livro na coleção.")
+                    else:
+                        for d in docs[:20]:
+                            with st.expander(d["id"], expanded=False):
+                                st.write("**Metadata:**", d.get("metadata", {}))
+                                st.text(d.get("document_preview", "") or "")
+                        if len(docs) > 20:
+                            st.info(f"... e mais {len(docs) - 20} documentos.")
+                else:
+                    st.error(f"Erro ({r.status_code}): {r.text}")
+            except Exception as e:
+                st.error(f"Falha de conexão: {e}")
+
+    st.markdown("---")
+    st.subheader("🧹 Limpeza / Reindexação")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        clear_this = st.checkbox("Confirmo apagar **apenas** a memória deste livro", key="confirm_clear_book")
+        if st.button("🗑️ Limpar memória do livro atual", type="secondary", key="btn_clear_book") and clear_this:
+            try:
+                r = requests.delete(f"{API_BASE}/chroma/book/{book_id}", timeout=30)
+                if r.ok:
+                    st.success(f"Memória do livro '{book_id}' apagada.")
+                else:
+                    st.error(f"Erro ({r.status_code}): {r.text}")
+            except Exception as e:
+                st.error(f"Falha de conexão: {e}")
+
+    with c2:
+        clear_all = st.checkbox("Confirmo que desejo apagar **TUDO**", key="confirm_clear_all")
+        if st.button("🧽 Limpar TODAS as coleções", type="secondary", key="btn_clear_all") and clear_all:
             try:
                 r = requests.delete(f"{API_BASE}/chroma/clear", timeout=60)
                 if r.ok:
@@ -1073,63 +997,43 @@ with colB:
             except Exception as e:
                 st.error(f"Falha de conexão: {e}")
 
-# 3) Reindexar capítulos já salvos em /data/chapters
-if st.button("🔁 Reindexar capítulos do disco", type="secondary"):
-    try:
-        r = requests.post(f"{API_BASE}/chroma/vectorize-existing", timeout=600)
-        if r.ok:
-            data = r.json()
-            st.success(f"Vetorização concluída: {data.get('vectorized_count',0)}/{data.get('total_files',0)}")
-            if data.get("errors"):
-                with st.expander("Ver erros", expanded=False):
-                    for err in data["errors"]:
-                        st.write("• ", err)
-        else:
-            st.error(f"Erro ({r.status_code}): {r.text}")
-    except Exception as e:
-        st.error(f"Falha de conexão: {e}")
+    with c3:
+        if st.button("🔁 Reindexar capítulos do disco", type="secondary", key="btn_reindex"):
+            try:
+                r = requests.post(f"{API_BASE}/chroma/vectorize-existing", timeout=600)
+                if r.ok:
+                    data = r.json()
+                    st.success(f"Vetorização: {data.get('vectorized_count',0)}/{data.get('total_files',0)}")
+                    if data.get("errors"):
+                        with st.expander("Erros", expanded=False):
+                            for err in data["errors"]:
+                                st.write("• ", err)
+                else:
+                    st.error(f"Erro ({r.status_code}): {r.text}")
+            except Exception as e:
+                st.error(f"Falha de conexão: {e}")
 
-# 4) Ver só os docs do livro atual (filtra do retorno da coleção)
-if st.button("📄 Ver docs do livro atual", type="secondary"):
-    try:
-        r = requests.get(f"{API_BASE}/chroma/collection/book_memory", timeout=30)
-        if r.ok:
-            data = r.json()
-            docs = [d for d in data.get("documents", []) if d.get("metadata", {}).get("book_id") == book_id]
-            if not docs:
-                st.info("Nenhum documento deste livro na coleção.")
-            else:
-                for d in docs[:20]:  # limita visualização
-                    with st.expander(d["id"], expanded=False):
-                        st.write("**Metadata:**", d.get("metadata", {}))
-                        st.text(d.get("document_preview", "") or "")
-                if len(docs) > 20:
-                    st.info(f"... e mais {len(docs) - 20} documentos.")
-        else:
-            st.error(f"Erro ({r.status_code}): {r.text}")
-    except Exception as e:
-        st.error(f"Falha de conexão: {e}")
+with tab_maint:
+    st.subheader("🔧 Status dos Serviços")
+    if st.session_state.get("ready"):
+        st.success("✅ Sistema Pronto")
+        st.info("🎯 vLLM: Qwen2.5-14B-Instruct")
+        st.info("💾 ChromaDB: Conectado")
+        st.info("🚀 API: Funcionando")
+    else:
+        st.warning("⏳ Inicializando...")
+        st.info("🔄 vLLM: Carregando modelo")
+        st.info("🔄 ChromaDB: Conectando")
 
+    st.markdown("---")
+    colX, colY = st.columns(2)
+    with colX:
+        if st.button("🔄 Atualizar Status", type="secondary", key="maint_refresh_status"):
+            st.rerun()
+    with colY:
+        if st.button("📊 Atualizar Lista de Livros", type="secondary", key="maint_refresh_books"):
+            st.rerun()
+
+# (opcional) rodapé
 st.divider()
-
-# ========================
-# Informações finais
-# ========================
-st.caption("💡 **Dica:** Os arquivos são salvos automaticamente em `/data/chapters/` com nomenclatura clara:")
-st.caption("   • Capítulos: `livro__id.md`")
-st.caption("   • Sugestões: `sugest_titulo__id.md`")
-st.caption("   • Críticas: `critica_titulo__id.md`")
-
-# ========================
-# Controles de debug e atualização
-# ========================
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("🔄 Atualizar Status", type="secondary"):
-        st.rerun()
-
-with col2:
-    if st.button("📊 Atualizar Lista de Livros", type="secondary"):
-        st.rerun()
-
-# Debug info removido para limpar interface
+st.caption("💡 Dica: arquivos em /data/chapters/ → capítulos: livro__id.md | sugestões: sugest_titulo__id.md | críticas: critica_titulo__id.md")
